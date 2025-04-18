@@ -2,57 +2,55 @@ import requests
 from telegram.ext import ApplicationBuilder, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
+from dateutil import parser
 import pytz
 
 TOKEN = '7912815635:AAGdKqihiMsKEe8VSNBL-3OUw70iwQs7CVY'
 CHAT_ID = '-1002644568185'
-
-# Часовой пояс МСК
 moscow_tz = pytz.timezone('Europe/Moscow')
 
-# Функция для получения списка турниров
 def get_warface_tournaments():
     url = 'https://pvp.vkplay.ru/api/tournaments?game=warface&status=active'
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
         return response.json()
-    return []
+    except Exception as e:
+        print(f"Ошибка при получении турниров: {e}")
+        return []
 
-# Задача: отправка списка турниров в 13:00 МСК
 async def send_daily_tournaments(context: ContextTypes.DEFAULT_TYPE):
     tournaments = get_warface_tournaments()
     if tournaments:
         message = "🎮 Активные турниры по Warface:\n\n"
         for t in tournaments:
             message += f"🏆 {t['title']}\n🔗 {t['url']}\n\n"
-        await context.bot.send_message(chat_id=CHAT_ID, text=message)
     else:
-        await context.bot.send_message(chat_id=CHAT_ID, text="Сегодня нет активных турниров по Warface.")
+        message = "Сегодня нет активных турниров по Warface."
+    await context.bot.send_message(chat_id=CHAT_ID, text=message)
 
-# Задача: оповещение за час до окончания регистрации
 async def notify_before_registration_end(context: ContextTypes.DEFAULT_TYPE):
     tournaments = get_warface_tournaments()
     now = datetime.now(pytz.utc)
     for t in tournaments:
-        reg_end = datetime.fromisoformat(t['registration_end_time']).astimezone(pytz.utc)
-        if timedelta(hours=0) < reg_end - now <= timedelta(hours=1):
-            message = f"⏰ Остался 1 час до окончания регистрации на турнир:\n🏆 {t['title']}\n🔗 {t['url']}"
-            await context.bot.send_message(chat_id=CHAT_ID, text=message)
+        try:
+            reg_end = parser.isoparse(t['registration_end_time']).astimezone(pytz.utc)
+            if timedelta(hours=0) < reg_end - now <= timedelta(hours=1):
+                message = f"⏰ Остался 1 час до окончания регистрации:\n🏆 {t['title']}\n🔗 {t['url']}"
+                await context.bot.send_message(chat_id=CHAT_ID, text=message)
+        except Exception as e:
+            print(f"Ошибка парсинга даты: {e}")
 
-# Главная функция
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     scheduler = AsyncIOScheduler(timezone=moscow_tz)
-    scheduler.add_job(send_daily_tournaments, 'cron', hour=13, minute=0, args=[ContextTypes.DEFAULT_TYPE])
-    scheduler.add_job(notify_before_registration_end, 'interval', minutes=30, args=[ContextTypes.DEFAULT_TYPE])
+    scheduler.add_job(send_daily_tournaments, 'cron', hour=13, minute=0)
+    scheduler.add_job(notify_before_registration_end, 'interval', minutes=30)
     scheduler.start()
 
-    await app.initialize()
-    await app.start()
     print("Бот запущен.")
-    await app.updater.start_polling()
-    await app.updater.wait_until_shutdown()
+    await app.run_polling()
 
 import asyncio
 asyncio.run(main())
